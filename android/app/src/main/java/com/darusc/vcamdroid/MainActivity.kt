@@ -44,7 +44,8 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
     private val qrscanner = QRScanner()
     private var connectionManager = ConnectionManager.getInstance(this)
     private var camera: Camera? = null
-    private var beaconListener: ServerDiscovery? = null
+    private var discovery: ServerDiscovery? = null
+    @Volatile private var connectionEstablished = false
     private val discoveryScope = CoroutineScope(Dispatchers.IO)
 
     private var isConnecting = false
@@ -70,7 +71,12 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
         connectionManager = ConnectionManager.getInstance(this)
         if(camera != null) {
             camera!!.start(Size(1280, 720), CameraSelector.DEFAULT_BACK_CAMERA)
-            connectWIFI()
+            // Upstream called connectWIFI() here unconditionally, which re-opened a
+            // second connection and clobbered the live one. Only fall back to LAN
+            // discovery when we are not already connected/connecting.
+            if (!connectionEstablished) {
+                connectWIFI()
+            }
         }
     }
 
@@ -103,6 +109,10 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
     }
 
     override fun onConnectionSuccessful(connectionMode: ConnectionManager.Mode) {
+        // Stop any further discovery the moment we have a live link: a late sweep hit
+        // would open a second socket and replace this one in ConnectionManager.
+        connectionEstablished = true
+        discovery?.cancel()
         qrscanner.stop()
         Logger.log("MAIN", "Connection successful $connectionMode")
 
@@ -121,7 +131,7 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
             } else {
                 isConnecting = false
                 qrscanner.stop()
-                beaconListener?.cancel()
+                discovery?.cancel()
                 Logger.log("MAIN", "Error: Cannot connect!")
                 Toast.makeText(this, "No PC found on this network. Start the PC beacon or restart app", Toast.LENGTH_LONG).show()
             }
@@ -216,7 +226,7 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
             Logger.log("MAIN", "PC discovered at $ip")
             connectionManager.connect(ip, 6969)
         }
-        beaconListener = discovery
+        this.discovery = discovery
         discoveryScope.launch { discovery.sweepSubnet() }
         // Optional fast path: only useful if the owner ever runs pc/beacon.py.
         discovery.listenForBeacon { ip ->
