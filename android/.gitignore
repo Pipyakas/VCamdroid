@@ -14,3 +14,9 @@
 .cxx
 local.properties
 app/release
+
+# build/session artifacts
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
