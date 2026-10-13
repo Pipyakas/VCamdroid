@@ -39,6 +39,27 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback, ConnectionMa
 
         connectionManager.setOnBytesReceivedCallback(::onBytesReceived)
         streamer = Streamer(StreamOptions(), this, viewBinding.surfaceView)
+
+        viewBinding.screenToggleButton.setOnClickListener { toggleScreen() }
+    }
+
+    /**
+     * Blanks the phone display while streaming keeps running.
+     *
+     * A normal app cannot put Android to sleep (that needs DEVICE_POWER, DEVICE_ADMIN or
+     * root), and clearing FLAG_KEEP_SCREEN_ON would let the device doze and drop the camera.
+     * So instead of a real sleep we drive the panel to zero brightness: the backlight goes
+     * off, the preview is invisible, and the stream is untouched. Tapping again restores the
+     * system's brightness (BRIGHTNESS_OVERRIDE_NONE).
+     */
+    private fun toggleScreen() {
+        val params = window.attributes
+        val blanked = params.screenBrightness == 0f
+        params.screenBrightness = if (blanked) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else 0f
+        window.attributes = params
+        viewBinding.screenToggleButton.text = if (blanked) "Screen: ON" else "Screen: OFF"
+        viewBinding.screenToggleButton.alpha = if (blanked) 0.85f else 0.15f
+        Logger.log("STREAM", if (blanked) "screen on" else "screen blanked")
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
