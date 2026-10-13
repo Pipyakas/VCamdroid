@@ -27,11 +27,14 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.darusc.vcamdroid.databinding.ActivityMainBinding
-import com.darusc.vcamdroid.networking.BeaconListener
+import com.darusc.vcamdroid.networking.ServerDiscovery
 import com.darusc.vcamdroid.networking.ConnectionManager
 import com.darusc.vcamdroid.util.Logger
 import com.darusc.vcamdroid.video.Camera
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.security.Permission
 
 class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallback {
@@ -41,7 +44,8 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
     private val qrscanner = QRScanner()
     private var connectionManager = ConnectionManager.getInstance(this)
     private var camera: Camera? = null
-    private var beaconListener: BeaconListener? = null
+    private var beaconListener: ServerDiscovery? = null
+    private val discoveryScope = CoroutineScope(Dispatchers.IO)
 
     private var isConnecting = false
 
@@ -117,7 +121,7 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
             } else {
                 isConnecting = false
                 qrscanner.stop()
-                beaconListener?.stop()
+                beaconListener?.cancel()
                 Logger.log("MAIN", "Error: Cannot connect!")
                 Toast.makeText(this, "No PC found on this network. Start the PC beacon or restart app", Toast.LENGTH_LONG).show()
             }
@@ -205,15 +209,20 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
     }
 
     private fun connectWIFI() {
-        // Zero-config LAN discovery: listen for the PC beacon, then connect to it.
-        // The QR scanner stays available as a manual fallback.
-        if (beaconListener == null) {
-            beaconListener = BeaconListener { ip ->
-                Logger.log("MAIN", "PC discovered at $ip")
-                connectionManager.connect(ip, 6969)
-            }
+        // The phone finds the PC by itself: sweep its own subnet for a listener on the
+        // server port. Nothing has to run on the PC beyond the VCamdroid window, and no
+        // QR code has to be scanned.
+        val discovery = ServerDiscovery(6969) { ip ->
+            Logger.log("MAIN", "PC discovered at $ip")
+            connectionManager.connect(ip, 6969)
         }
-        beaconListener?.start()
+        beaconListener = discovery
+        discoveryScope.launch { discovery.sweepSubnet() }
+        // Optional fast path: only useful if the owner ever runs pc/beacon.py.
+        discovery.listenForBeacon { ip ->
+            Logger.log("MAIN", "PC beacon at $ip")
+            connectionManager.connect(ip, 6969)
+        }
         qrscanner.start()
     }
 }
