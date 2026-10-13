@@ -27,6 +27,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.darusc.vcamdroid.databinding.ActivityMainBinding
+import com.darusc.vcamdroid.networking.BeaconListener
 import com.darusc.vcamdroid.networking.ConnectionManager
 import com.darusc.vcamdroid.util.Logger
 import com.darusc.vcamdroid.video.Camera
@@ -40,6 +41,7 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
     private val qrscanner = QRScanner()
     private var connectionManager = ConnectionManager.getInstance(this)
     private var camera: Camera? = null
+    private var beaconListener: BeaconListener? = null
 
     private var isConnecting = false
 
@@ -106,15 +108,18 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
 
     override fun onConnectionFailed(connectionMode: ConnectionManager.Mode) {
         runOnUiThread {
-            if (connectionMode == ConnectionManager.Mode.USB && hasWifiConnection()) {
-                // If usb connection failed try again over wifi
+            if (connectionMode == ConnectionManager.Mode.USB) {
+                // Wired/ADB (loopback through the PC's adb forward) is unavailable —
+                // fall back to zero-config LAN discovery. No QR code required.
+                Logger.log("MAIN", "Loopback unavailable, starting LAN discovery")
+                Toast.makeText(this, "Wired unavailable, looking for PC on this network…", Toast.LENGTH_SHORT).show()
                 connectWIFI()
-                Toast.makeText(this, "Connection failed. Try in WiFi mode or restart app", Toast.LENGTH_LONG).show()
             } else {
                 isConnecting = false
                 qrscanner.stop()
+                beaconListener?.stop()
                 Logger.log("MAIN", "Error: Cannot connect!")
-                Toast.makeText(this, "Connection failed. Restart app to retry connecting again", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "No PC found on this network. Start the PC beacon or restart app", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -146,12 +151,9 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
             )
             camera!!.start(Size(1280, 720), CameraSelector.DEFAULT_BACK_CAMERA)
 
-            // Prioritize the usb connection through adb
-            if (hasUsbConnection()) {
-                connectUSB()
-            } else if (hasWifiConnection()) {
-                connectWIFI()
-            }
+            // Always try loopback first (works whenever the PC has the adb forward),
+            // and fall back to LAN discovery on failure. See connectUSB().
+            connectUSB()
         }
     }
 
@@ -195,12 +197,23 @@ class MainActivity : AppCompatActivity(), ConnectionManager.ConnectionStateCallb
     }
 
     private fun connectUSB() {
+        // Always attempt loopback: the PC's "adb forward tcp:6969 tcp:6969" makes the
+        // server reachable at 127.0.0.1 whether or not a cable is present. Upstream
+        // gated this on android.hardware.usb.action.USB_STATE, which reports the PHONE's
+        // USB-host port (OTG), not the PC cable, so it never fired on a normal phone.
         connectionManager.connect(6969)
     }
 
     private fun connectWIFI() {
-        // Start the QRScanner so it can scan the image frames received from the camera
-        // Actual WIFI connection is tried only on scan success
+        // Zero-config LAN discovery: listen for the PC beacon, then connect to it.
+        // The QR scanner stays available as a manual fallback.
+        if (beaconListener == null) {
+            beaconListener = BeaconListener { ip ->
+                Logger.log("MAIN", "PC discovered at $ip")
+                connectionManager.connect(ip, 6969)
+            }
+        }
+        beaconListener?.start()
         qrscanner.start()
     }
 }
